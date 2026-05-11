@@ -230,7 +230,12 @@ def draw_eye_bar(frame: np.ndarray, landmarks: list, bar_scale: float = 2.0, bar
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Jail filter: live webcam with retro pixel look and black eye bar(s)")
-    parser.add_argument("--camera-index", type=int, default=0)
+    parser.add_argument(
+        "--camera-index",
+        type=int,
+        default=1,
+        help="Camera device index (default 1 for external USB camera)",
+    )
     parser.add_argument("--camera-width", type=int, default=1280)
     parser.add_argument("--camera-height", type=int, default=720)
     parser.add_argument("--max-faces", type=int, default=3, help="Maximum faces to detect")
@@ -244,17 +249,41 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def open_camera(preferred_index: int, width: int, height: int) -> tuple[cv2.VideoCapture, int]:
+    # Probe USB-style indices first when the preferred one is unavailable.
+    candidate_indices = [preferred_index, 1, 2, 3, 0, 4, 5]
+    seen: set[int] = set()
+    ordered_indices: list[int] = []
+    for idx in candidate_indices:
+        if idx not in seen:
+            seen.add(idx)
+            ordered_indices.append(idx)
+
+    for idx in ordered_indices:
+        cap = cv2.VideoCapture(idx)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+        cap.set(cv2.CAP_PROP_FPS, 30)
+        if cap.isOpened():
+            ok, _ = cap.read()
+            if ok:
+                return cap, idx
+        cap.release()
+
+    raise RuntimeError(
+        "Could not open webcam. "
+        f"Tried camera indices: {ordered_indices}. "
+        "Use --camera-index N to select a working device."
+    )
+
+
 def main() -> None:
     args = parse_args()
     args.max_faces = max(1, min(5, args.max_faces))
     model_path = ensure_model(MODEL_PATH)
 
-    cap = cv2.VideoCapture(args.camera_index)
-    cap.set(cv2.CAP_PROP_FRAME_WIDTH, args.camera_width)
-    cap.set(cv2.CAP_PROP_FRAME_HEIGHT, args.camera_height)
-    cap.set(cv2.CAP_PROP_FPS, 30)
-    if not cap.isOpened():
-        raise RuntimeError("Could not open webcam")
+    cap, actual_camera_index = open_camera(args.camera_index, args.camera_width, args.camera_height)
+    print(f"[jail_filter] using camera index {actual_camera_index}")
 
     base_options = mp_python.BaseOptions(model_asset_path=str(model_path))
     options = vision.FaceLandmarkerOptions(
